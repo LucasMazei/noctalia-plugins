@@ -5,6 +5,6 @@
     "author": "Lucas Mazei <mazei.lucas@gmail.com>",
     "description": "Whisper is a voice assistant that uses hyprvoice to transcribe audio to text.",
     "entryPoints": {
-        "panel": "VoiceIndicator.qml"
+        "panel": "Panel.qml"
     }
 }
