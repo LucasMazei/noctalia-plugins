@@ -1,0 +1,26 @@
+{
+  "id": "metas",
+  "name": "Metas Globais",
+  "version": "1.0.0",
+  "minNoctaliaVersion": "3.7.1",
+  "author": "Mazei",
+  "license": "MIT",
+  "description": "Desktop widget showing yearly global goals (#goal notes) as a category-rollup progress board, parsed live from the Obsidian vault.",
+  "tags": ["Desktop", "Productivity"],
+  "entryPoints": {
+    "main": "Main.qml",
+    "desktopWidget": "DesktopWidget.qml",
+    "settings": "Settings.qml"
+  },
+  "dependencies": {
+    "plugins": []
+  },
+  "metadata": {
+    "defaultSettings": {
+      "goalsDir": "",
+      "year": 2026,
+      "refreshMinutes": 30,
+      "hideBackground": false
+    }
+  }
+}
