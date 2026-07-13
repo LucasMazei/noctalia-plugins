@@ -1,0 +1,1 @@
+/home/Usuario/phrases.txt

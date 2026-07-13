@@ -1,0 +1,37 @@
+{
+  "id": "marquee-text",
+  "name": "Marquee Text",
+  "version": "1.0.0",
+  "minNoctaliaVersion": "4.4.1",
+  "author": "mazei (fork of blackteaextract/not-just-text)",
+  "license": "MIT",
+  "repository": "local",
+  "description": "Scrolling marquee version of Not Just Text — clips to a fixed width and rolls long phrases.",
+  "tags": [
+    "Bar",
+    "Fun"
+  ],
+  "entryPoints": {
+    "main": "Main.qml",
+    "barWidget": "BarWidget.qml",
+    "settings": "Settings.qml"
+  },
+  "dependencies": {
+    "plugins": []
+  },
+  "metadata": {
+    "defaultSettings": {
+      "text": "Hello",
+      "fortuneEnabled": false,
+      "fortuneOffensive": false,
+      "fortuneEqual": false,
+      "fortuneCategory": "",
+      "fortuneMaxLength": 200,
+      "listEnabled": false,
+      "textFile": "",
+      "refreshOnWallpaper": true,
+      "maxWidth": 280,
+      "rollingSpeed": 25
+    }
+  }
+}

@@ -12,7 +12,7 @@ Item {
 
     property bool isListening: false
 
-    readonly property string hyprvoiceCommand: (pluginApi?.pluginSettings?.hyprvoiceCommand ?? "hyprvoice")
+    readonly property string hyprvoiceCommand: (pluginApi?.pluginSettings?.hyprvoiceCommand ?? "/home/Usuario/.local/bin/hyprvoice")
 
     function toggle() {
         root.isListening = !root.isListening

@@ -1,0 +1,13 @@
+{
+  "text": "Hello",
+  "fortuneEnabled": false,
+  "fortuneOffensive": false,
+  "fortuneEqual": false,
+  "fortuneCategory": "",
+  "fortuneMaxLength": 60,
+  "listEnabled": true,
+  "textFile": "",
+  "refreshOnWallpaper": true,
+  "maxWidth": 320,
+  "rollingSpeed": 25
+}
