@@ -107,6 +107,14 @@ Item {
       return todo.pageId === currentPageId;
     });
 
+    // Merged view: order by due date ascending, tasks without a due date last
+    pageTodos.sort(function(a, b) {
+      var ad = a.due ? new Date(a.due).getTime() : Infinity;
+      var bd = b.due ? new Date(b.due).getTime() : Infinity;
+      if (ad !== bd) return ad - bd;
+      return 0;
+    });
+
     // Populate both models in a single loop
     for (var i = 0; i < pageTodos.length; i++) {
       var todoItem = {
@@ -114,7 +122,9 @@ Item {
         text: pageTodos[i].text,
         completed: pageTodos[i].completed === true,
         createdAt: pageTodos[i].createdAt,
-        pageId: pageTodos[i].pageId
+        pageId: pageTodos[i].pageId,
+        due: pageTodos[i].due || "",
+        listTitle: pageTodos[i].listTitle || ""
       };
 
       // Add to full model
@@ -731,9 +741,27 @@ Item {
                         font.strikeout: modelData.completed
                         verticalAlignment: Text.AlignVCenter
                         elide: Text.ElideRight
-                        anchors.fill: parent
+                        anchors.left: parent.left
+                        anchors.right: todoListLabel.visible ? todoListLabel.left : parent.right
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
                         anchors.leftMargin: Style.marginS
                         anchors.rightMargin: Style.marginS
+                      }
+
+                      // Source-list label (merged multi-list view)
+                      NText {
+                        id: todoListLabel
+                        visible: !delegateItem.editing && modelData.listTitle && modelData.listTitle.length > 0
+                        text: "· " + (modelData.listTitle || "")
+                        color: Color.mOnSurfaceVariant
+                        opacity: 0.7
+                        font.pointSize: Style.fontSizeXS
+                        verticalAlignment: Text.AlignVCenter
+                        elide: Text.ElideRight
+                        anchors.right: parent.right
+                        anchors.rightMargin: Style.marginS
+                        anchors.verticalCenter: parent.verticalCenter
                       }
 
                       // Edit text field - Using TextField directly to have more control

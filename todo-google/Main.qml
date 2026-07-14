@@ -109,259 +109,259 @@ Item {
     });
   }
 
-  // Two-way sync with Google Tasks
+  // Two-way sync with Google Tasks — ALL lists, merged into one view
   function syncWithGoogleTasks() {
     if (isSyncing) {
       Logger.i("TodoGoogle", "Sync already in progress, skipping");
       return;
     }
-    
+
     if (!pluginApi?.pluginSettings?.syncEnabled) {
       Logger.i("TodoGoogle", "Sync is disabled");
       return;
     }
-    
-    var taskListId = pluginApi?.pluginSettings?.googleTaskListId;
-    if (!taskListId) {
-      Logger.e("TodoGoogle", "No task list ID configured");
-      pluginApi.pluginSettings.syncStatus = "error";
-      pluginApi.pluginSettings.syncError = "No task list selected";
-      pluginApi.saveSettings();
-      return;
-    }
-    
+
     isSyncing = true;
     pluginApi.pluginSettings.syncStatus = "syncing";
     pluginApi.pluginSettings.syncError = null;
     pluginApi.saveSettings();
-    
+
     ensureValidToken(function(tokenError, accessToken) {
       if (tokenError) {
-        // Try to refresh token
         refreshTokenIfNeeded(function(refreshError, newToken) {
           if (refreshError) {
-            isSyncing = false;
-            pluginApi.pluginSettings.syncStatus = "error";
-            pluginApi.pluginSettings.syncError = refreshError;
-            pluginApi.saveSettings();
-            Logger.e("TodoGoogle", "Token refresh failed: " + refreshError);
+            failSync("Token refresh failed: " + refreshError);
             return;
           }
-          performSync(newToken, taskListId);
+          fetchAllLists(newToken);
         });
       } else {
-        performSync(accessToken, taskListId);
+        fetchAllLists(accessToken);
       }
     });
   }
 
-  function performSync(accessToken, taskListId) {
-    // Step 1: Fetch tasks from Google Tasks
-    GoogleTasksAPI.getTasks(taskListId, accessToken, function(error, response) {
+  function failSync(err) {
+    isSyncing = false;
+    pluginApi.pluginSettings.syncStatus = "error";
+    pluginApi.pluginSettings.syncError = err;
+    pluginApi.saveSettings();
+    Logger.e("TodoGoogle", "Sync failed: " + err);
+  }
+
+  // Fetch every task list, then all tasks in each, then merge once
+  function fetchAllLists(accessToken) {
+    GoogleTasksAPI.getTaskLists(accessToken, function(error, response) {
       if (error) {
-        // Check if it's an auth error and try refresh
         if (error.indexOf("Unauthorized") >= 0 || error.indexOf("401") >= 0) {
           refreshTokenIfNeeded(function(refreshError, newToken) {
             if (refreshError) {
-              isSyncing = false;
-              pluginApi.pluginSettings.syncStatus = "error";
-              pluginApi.pluginSettings.syncError = "Authentication failed: " + refreshError;
-              pluginApi.saveSettings();
-              Logger.e("TodoGoogle", "Authentication failed: " + refreshError);
+              failSync("Authentication failed: " + refreshError);
               return;
             }
-            // Retry with new token
-            performSync(newToken, taskListId);
+            fetchAllLists(newToken);
           });
           return;
         }
-        
-        isSyncing = false;
-        pluginApi.pluginSettings.syncStatus = "error";
-        pluginApi.pluginSettings.syncError = error;
-        pluginApi.saveSettings();
-        Logger.e("TodoGoogle", "Failed to fetch tasks: " + error);
+        failSync(error);
         return;
       }
-      
-      var googleTasks = response.items || [];
-      var localTodos = pluginApi.pluginSettings.todos || [];
-      
-      // Step 2: Merge Google Tasks with local todos
-      mergeTasks(googleTasks, localTodos, accessToken, taskListId);
+
+      var lists = (response && response.items) ? response.items : [];
+      if (lists.length === 0) {
+        failSync("No task lists found");
+        return;
+      }
+
+      // Default list for brand-new local todos = first list, unless one is already set
+      if (!pluginApi.pluginSettings.googleTaskListId) {
+        pluginApi.pluginSettings.googleTaskListId = lists[0].id;
+      }
+
+      var allGoogleTasks = [];
+      var listTitleById = {};
+      var fetchedListIds = {};
+      var idx = 0;
+
+      function fetchNextList() {
+        if (idx >= lists.length) {
+          mergeAllTasks(allGoogleTasks, listTitleById, fetchedListIds, accessToken);
+          return;
+        }
+        var list = lists[idx];
+        listTitleById[list.id] = list.title;
+        GoogleTasksAPI.getTasks(list.id, accessToken, function(err, resp) {
+          if (err) {
+            Logger.e("TodoGoogle", "Failed to fetch list '" + list.title + "': " + err);
+          } else {
+            fetchedListIds[list.id] = true;
+            var items = (resp && resp.items) ? resp.items : [];
+            for (var i = 0; i < items.length; i++) {
+              items[i].__listId = list.id;
+              items[i].__listTitle = list.title;
+              allGoogleTasks.push(items[i]);
+            }
+          }
+          idx++;
+          fetchNextList();
+        });
+      }
+      fetchNextList();
     });
   }
 
-  function mergeTasks(googleTasks, localTodos, accessToken, taskListId) {
+  // Global reconcile keyed by (listId + ":" + googleTaskId)
+  function mergeAllTasks(googleTasks, listTitleById, fetchedListIds, accessToken) {
     var now = new Date().toISOString();
     var updatedTodos = [];
-    var tasksToCreate = [];
-    var tasksToUpdate = [];
-    
-    // Create a map of Google tasks by ID
-    var googleTasksMap = {};
-    for (var i = 0; i < googleTasks.length; i++) {
-      googleTasksMap[googleTasks[i].id] = googleTasks[i];
-    }
-    
-    // Create a map of local todos by Google Task ID
-    var localTodosByGoogleId = {};
-    var localTodosWithoutGoogleId = [];
-    
+    var tasksToCreate = [];              // local todos to create in Google
+    var tasksToUpdate = [];              // { todo, listId, googleTaskId }
+
+    var localTodos = pluginApi.pluginSettings.todos || [];
+    var localByKey = {};
+    var localWithoutGoogle = [];
     for (var j = 0; j < localTodos.length; j++) {
-      var todo = localTodos[j];
-      if (todo.googleTaskId) {
-        localTodosByGoogleId[todo.googleTaskId] = todo;
+      var lt = localTodos[j];
+      if (lt.googleTaskId && lt.googleTaskListId) {
+        localByKey[lt.googleTaskListId + ":" + lt.googleTaskId] = lt;
       } else {
-        localTodosWithoutGoogleId.push(todo);
+        localWithoutGoogle.push(lt);
       }
     }
-    
-    // Process Google tasks - update local or create new
+
+    var seenKeys = {};
     for (var k = 0; k < googleTasks.length; k++) {
-      var googleTask = googleTasks[k];
-      var localTodo = localTodosByGoogleId[googleTask.id];
-      
-      if (localTodo) {
-        // Both exist - merge based on lastSyncedAt (last-write-wins)
-        var googleUpdated = new Date(googleTask.updated || googleTask.updated || 0).getTime();
-        var localUpdated = localTodo.lastSyncedAt ? new Date(localTodo.lastSyncedAt).getTime() : 0;
-        
-        if (googleUpdated > localUpdated) {
-          // Google is newer - update local
-          localTodo.text = googleTask.title || "";
-          localTodo.completed = googleTask.status === "completed";
-          localTodo.lastSyncedAt = now;
-          updatedTodos.push(localTodo);
-        } else if (localUpdated > googleUpdated) {
-          // Local is newer - update Google
-          tasksToUpdate.push({
-            todo: localTodo,
-            googleTask: googleTask
-          });
-          localTodo.lastSyncedAt = now;
-          updatedTodos.push(localTodo);
+      var g = googleTasks[k];
+      var key = g.__listId + ":" + g.id;
+      seenKeys[key] = true;
+      var local = localByKey[key];
+
+      if (local) {
+        var gUpdated = new Date(g.updated || 0).getTime();
+        var lUpdated = local.lastSyncedAt ? new Date(local.lastSyncedAt).getTime() : 0;
+
+        if (gUpdated > lUpdated) {
+          // Google newer -> update local
+          local.text = g.title || "";
+          local.completed = g.status === "completed";
+          local.due = g.due || "";
+          local.listTitle = g.__listTitle;
+          local.googleTaskListId = g.__listId;
+          local.lastSyncedAt = now;
+        } else if (lUpdated > gUpdated) {
+          // Local newer -> push to Google
+          tasksToUpdate.push({ todo: local, listId: g.__listId, googleTaskId: g.id });
+          local.listTitle = g.__listTitle;
+          local.lastSyncedAt = now;
         } else {
-          // Same timestamp - keep local
-          updatedTodos.push(localTodo);
+          local.listTitle = g.__listTitle;
+          local.due = g.due || local.due || "";
         }
+        updatedTodos.push(local);
       } else {
-        // Google task doesn't exist locally - create new local todo
-        var newTodo = {
-          id: Date.now() + k, // Ensure unique ID
-          text: googleTask.title || "",
-          completed: googleTask.status === "completed",
-          createdAt: googleTask.updated || now,
-          pageId: 0, // Default to first page
-          googleTaskId: googleTask.id,
-          googleTaskListId: taskListId,
+        // New remote task -> create local
+        updatedTodos.push({
+          id: Date.now() + k,
+          text: g.title || "",
+          completed: g.status === "completed",
+          createdAt: g.updated || now,
+          due: g.due || "",
+          pageId: 0,
+          googleTaskId: g.id,
+          googleTaskListId: g.__listId,
+          listTitle: g.__listTitle,
           lastSyncedAt: now
-        };
-        updatedTodos.push(newTodo);
+        });
       }
     }
-    
-    // Process local todos without Google ID - create in Google
-    for (var m = 0; m < localTodosWithoutGoogleId.length; m++) {
-      var localTodo = localTodosWithoutGoogleId[m];
-      tasksToCreate.push(localTodo);
-      updatedTodos.push(localTodo);
-    }
-    
-    // Process local todos that need updates
-    for (var n = 0; n < localTodos.length; n++) {
-      var todo = localTodos[n];
-      if (todo.googleTaskId && !localTodosByGoogleId[todo.googleTaskId]) {
-        // This shouldn't happen, but handle it
-        updatedTodos.push(todo);
+
+    // Local todos that were synced before but are gone remotely.
+    // Drop only if their list was successfully fetched (real remote delete);
+    // keep them if the list errored this round (avoid data loss on transient failure).
+    for (var keyL in localByKey) {
+      if (!seenKeys[keyL]) {
+        var orphan = localByKey[keyL];
+        if (!fetchedListIds[orphan.googleTaskListId]) {
+          updatedTodos.push(orphan);
+        }
       }
     }
-    
-    // Update local todos
+
+    // Local-only todos (no Google id yet) -> create in Google under their list or the default
+    var defaultListId = pluginApi.pluginSettings.googleTaskListId;
+    for (var m = 0; m < localWithoutGoogle.length; m++) {
+      var lw = localWithoutGoogle[m];
+      if (!lw.googleTaskListId) lw.googleTaskListId = defaultListId;
+      if (!lw.listTitle) lw.listTitle = listTitleById[lw.googleTaskListId] || "";
+      tasksToCreate.push(lw);
+      updatedTodos.push(lw);
+    }
+
     pluginApi.pluginSettings.todos = updatedTodos;
-    
-    // Recalculate counts
-    var completedCount = 0;
-    for (var p = 0; p < updatedTodos.length; p++) {
-      if (updatedTodos[p].completed) {
-        completedCount++;
-      }
-    }
-    pluginApi.pluginSettings.count = updatedTodos.length;
-    pluginApi.pluginSettings.completedCount = completedCount;
-    
-    // Create tasks in Google
-    var createIndex = 0;
-    function createNextTask() {
-      if (createIndex >= tasksToCreate.length) {
-        updateNextTask();
-        return;
-      }
-      
-      var todo = tasksToCreate[createIndex];
-      GoogleTasksAPI.createTask(taskListId, {
+    recount(updatedTodos);
+
+    var ci = 0;
+    function createNext() {
+      if (ci >= tasksToCreate.length) { updateNext(); return; }
+      var todo = tasksToCreate[ci];
+      GoogleTasksAPI.createTask(todo.googleTaskListId, {
         title: todo.text,
-        completed: todo.completed
-      }, accessToken, function(error, createdTask) {
-        if (error) {
-          Logger.e("TodoGoogle", "Failed to create task in Google: " + error);
-          // Continue with next task
+        completed: todo.completed,
+        due: todo.due
+      }, accessToken, function(err, created) {
+        if (err) {
+          Logger.e("TodoGoogle", "Failed to create task in Google: " + err);
         } else {
-          // Update local todo with Google task ID
           for (var q = 0; q < updatedTodos.length; q++) {
             if (updatedTodos[q].id === todo.id) {
-              updatedTodos[q].googleTaskId = createdTask.id;
-              updatedTodos[q].googleTaskListId = taskListId;
+              updatedTodos[q].googleTaskId = created.id;
               updatedTodos[q].lastSyncedAt = now;
               break;
             }
           }
         }
-        createIndex++;
-        createNextTask();
+        ci++;
+        createNext();
       });
     }
-    
-    // Update tasks in Google
-    var updateIndex = 0;
-    function updateNextTask() {
-      if (updateIndex >= tasksToUpdate.length) {
-        finishSync();
-        return;
-      }
-      
-      var updateItem = tasksToUpdate[updateIndex];
-      GoogleTasksAPI.updateTask(taskListId, updateItem.googleTask.id, {
-        title: updateItem.todo.text,
-        completed: updateItem.todo.completed
-      }, accessToken, function(error, updatedTask) {
-        if (error) {
-          Logger.e("TodoGoogle", "Failed to update task in Google: " + error);
-        }
-        updateIndex++;
-        updateNextTask();
+
+    var ui = 0;
+    function updateNext() {
+      if (ui >= tasksToUpdate.length) { finish(); return; }
+      var it = tasksToUpdate[ui];
+      GoogleTasksAPI.updateTask(it.listId, it.googleTaskId, {
+        title: it.todo.text,
+        completed: it.todo.completed,
+        due: it.todo.due
+      }, accessToken, function(err) {
+        if (err) Logger.e("TodoGoogle", "Failed to update task in Google: " + err);
+        ui++;
+        updateNext();
       });
     }
-    
-    // Save updated todos after all operations
-    function finishSync() {
+
+    function finish() {
       pluginApi.pluginSettings.todos = updatedTodos;
       pluginApi.pluginSettings.lastSyncAt = now;
       pluginApi.pluginSettings.syncStatus = "synced";
       pluginApi.pluginSettings.syncError = null;
       pluginApi.saveSettings();
       isSyncing = false;
-      Logger.i("TodoGoogle", "Sync completed successfully");
+      Logger.i("TodoGoogle", "Sync completed: " + updatedTodos.length + " todos across all lists");
     }
-    
-    // Start the sync operations
-    if (tasksToCreate.length > 0) {
-      createNextTask();
-    } else if (tasksToUpdate.length > 0) {
-      updateNextTask();
-    } else {
-      finishSync();
+
+    if (tasksToCreate.length > 0) createNext();
+    else if (tasksToUpdate.length > 0) updateNext();
+    else finish();
+  }
+
+  function recount(todos) {
+    var c = 0;
+    for (var p = 0; p < todos.length; p++) {
+      if (todos[p].completed) c++;
     }
+    pluginApi.pluginSettings.count = todos.length;
+    pluginApi.pluginSettings.completedCount = c;
   }
 
   // Sync a single todo to Google Tasks (called when todo is created/updated)
@@ -431,14 +431,17 @@ Item {
 
         var todos = pluginApi.pluginSettings.todos || [];
 
+        var defaultListId = pluginApi.pluginSettings.googleTaskListId || "";
         var newTodo = {
           id: Date.now(),
           text: text,
           completed: false,
           createdAt: new Date().toISOString(),
+          due: "",
           pageId: pageId,
           googleTaskId: "",
-          googleTaskListId: "",
+          googleTaskListId: defaultListId,
+          listTitle: "",
           lastSyncedAt: null,
           needsSync: true
         };
@@ -452,10 +455,10 @@ Item {
         ToastService.showNotice("Added new todo: " + text);
         
         // Sync to Google Tasks if enabled
-        if (pluginApi.pluginSettings.syncEnabled && pluginApi.pluginSettings.googleAccessToken && pluginApi.pluginSettings.googleTaskListId) {
+        if (pluginApi.pluginSettings.syncEnabled && pluginApi.pluginSettings.googleAccessToken && newTodo.googleTaskListId) {
           ensureValidToken(function(error, accessToken) {
             if (!error) {
-              syncTodoToGoogle(newTodo, accessToken, pluginApi.pluginSettings.googleTaskListId);
+              syncTodoToGoogle(newTodo, accessToken, newTodo.googleTaskListId);
             }
           });
         }
@@ -497,10 +500,10 @@ Item {
           ToastService.showNotice("Todo status changed");
           
           // Sync to Google Tasks if enabled
-          if (pluginApi.pluginSettings.syncEnabled && pluginApi.pluginSettings.googleAccessToken && pluginApi.pluginSettings.googleTaskListId && todo) {
+          if (pluginApi.pluginSettings.syncEnabled && pluginApi.pluginSettings.googleAccessToken && todo) {
             ensureValidToken(function(error, accessToken) {
               if (!error) {
-                syncTodoToGoogle(todo, accessToken, pluginApi.pluginSettings.googleTaskListId);
+                syncTodoToGoogle(todo, accessToken, todo.googleTaskListId || pluginApi.pluginSettings.googleTaskListId);
               }
             });
           }
@@ -563,10 +566,10 @@ Item {
           ToastService.showNotice("Removed todo");
           
           // Delete from Google Tasks if synced
-          if (todoToRemove && todoToRemove.googleTaskId && pluginApi.pluginSettings.syncEnabled && pluginApi.pluginSettings.googleAccessToken && pluginApi.pluginSettings.googleTaskListId) {
+          if (todoToRemove && todoToRemove.googleTaskId && pluginApi.pluginSettings.syncEnabled && pluginApi.pluginSettings.googleAccessToken && (todoToRemove.googleTaskListId || pluginApi.pluginSettings.googleTaskListId)) {
             ensureValidToken(function(error, accessToken) {
               if (!error) {
-                GoogleTasksAPI.deleteTask(pluginApi.pluginSettings.googleTaskListId, todoToRemove.googleTaskId, accessToken, function(deleteError) {
+                GoogleTasksAPI.deleteTask(todoToRemove.googleTaskListId || pluginApi.pluginSettings.googleTaskListId, todoToRemove.googleTaskId, accessToken, function(deleteError) {
                   if (deleteError) {
                     Logger.e("TodoGoogle", "Failed to delete task from Google: " + deleteError);
                   }

@@ -217,9 +217,17 @@ ColumnLayout {
       visible: pluginApi?.pluginSettings?.googleAccessToken && !isLoadingTaskLists
 
       NText {
-        text: "Task List"
+        text: "Default list for new tasks"
         font.pointSize: Style.fontSizeM
         font.weight: Font.Medium
+      }
+
+      NText {
+        Layout.fillWidth: true
+        text: "The widget syncs and shows tasks from ALL your lists. This only picks where new tasks you add here get created."
+        wrapMode: Text.Wrap
+        color: Color.mOnSurfaceVariant
+        font.pointSize: Style.fontSizeS
       }
 
       ComboBox {
@@ -240,7 +248,7 @@ ColumnLayout {
           if (pluginApi && index >= 0 && index < availableTaskLists.length) {
             pluginApi.pluginSettings.googleTaskListId = availableTaskLists[index].id;
             pluginApi.saveSettings();
-            ToastService.showNotice("Task list selected: " + availableTaskLists[index].title);
+            ToastService.showNotice("Default list: " + availableTaskLists[index].title);
           }
         }
       }

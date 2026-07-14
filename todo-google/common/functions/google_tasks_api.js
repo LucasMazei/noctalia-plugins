@@ -213,7 +213,9 @@ function getTasks(taskListId, accessToken, callback) {
         return;
     }
 
-    var url = GOOGLE_TASKS_API_BASE + "/lists/" + encodeURIComponent(taskListId) + "/tasks?showCompleted=true&showHidden=true";
+    // Open tasks only — the widget aggregates every list, so pulling completed/hidden
+    // history from all of them (incl. archives) would flood the view and bloat storage.
+    var url = GOOGLE_TASKS_API_BASE + "/lists/" + encodeURIComponent(taskListId) + "/tasks?showCompleted=false";
     makeApiRequest("GET", url, accessToken, null, callback);
 }
 
